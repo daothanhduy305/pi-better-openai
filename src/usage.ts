@@ -4,6 +4,7 @@ export { AUTH_FILE, readCodexAuth } from "./codex-auth.ts";
 
 export type UsageWindow = {
   used_percent?: number | null;
+  limit_window_seconds?: number | null;
   reset_after_seconds?: number | null;
   reset_at?: number | null;
 };
@@ -198,6 +199,17 @@ function getResetSeconds(window: UsageWindow | null | undefined, now: number): n
   return Math.max(0, resetAtSeconds - now / 1000);
 }
 
+function assignUsageWindows(bucket: RateLimitBucket | null): (UsageWindow | undefined)[] {
+  const slots: (UsageWindow | undefined)[] = [];
+  [bucket?.primary_window, bucket?.secondary_window].forEach((window, index) => {
+    if (!window) return;
+    const slot =
+      window.limit_window_seconds == null ? index : window.limit_window_seconds >= 86_400 ? 1 : 0;
+    slots[slot] ??= window;
+  });
+  return slots;
+}
+
 export function usageScopeForModel(modelId: string | undefined): UsageScope {
   return modelId === SPARK_MODEL_ID ? "spark" : "default";
 }
@@ -212,13 +224,14 @@ export function parseUsageSnapshot(
     scope === "spark"
       ? (findSparkRateLimitBucket(data) ?? normalizeRateLimitBucket(data.rate_limit))
       : normalizeRateLimitBucket(data.rate_limit);
+  const [fiveHour, sevenDay] = assignUsageWindows(bucket);
   return {
     capturedAt: now,
     scope,
-    fiveHourLeftPercent: usedToLeftPercent(bucket?.primary_window?.used_percent),
-    sevenDayLeftPercent: usedToLeftPercent(bucket?.secondary_window?.used_percent),
-    fiveHourResetInSeconds: getResetSeconds(bucket?.primary_window, now),
-    sevenDayResetInSeconds: getResetSeconds(bucket?.secondary_window, now),
+    fiveHourLeftPercent: usedToLeftPercent(fiveHour?.used_percent),
+    sevenDayLeftPercent: usedToLeftPercent(sevenDay?.used_percent),
+    fiveHourResetInSeconds: getResetSeconds(fiveHour, now),
+    sevenDayResetInSeconds: getResetSeconds(sevenDay, now),
     isLimited: bucket?.limit_reached === true || bucket?.allowed === false,
   };
 }
@@ -252,7 +265,11 @@ export function formatUsageSnapshot(
         ),
       ].filter((value): value is string => value !== null)
     : [];
-  return `Usage: 5h: ${fiveHour} | 7d: ${sevenDay}${resets.length ? ` | ${resets.join(" | ")}` : ""}`;
+  const fiveHourSegment =
+    snapshot.fiveHourLeftPercent === null && snapshot.fiveHourResetInSeconds === null
+      ? ""
+      : `5h: ${fiveHour} | `;
+  return `Usage: ${fiveHourSegment}7d: ${sevenDay}${resets.length ? ` | ${resets.join(" | ")}` : ""}`;
 }
 
 function remainingResetSeconds(

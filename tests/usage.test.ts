@@ -217,6 +217,60 @@ describe("usage helpers", () => {
     );
   });
 
+  test("parses and formats weekly-only usage without a 5h segment", () => {
+    const now = 1_750_000_000_000;
+    const usage = _test.parseUsageSnapshot(
+      {
+        rate_limit: {
+          primary_window: {
+            used_percent: 20,
+            limit_window_seconds: 604800,
+            reset_after_seconds: 3 * 86400,
+          },
+        },
+      },
+      "gpt-5.5",
+      now,
+    );
+
+    expect(usage.fiveHourLeftPercent).toBeNull();
+    expect(usage.fiveHourResetInSeconds).toBeNull();
+    expect(usage.sevenDayLeftPercent).toBe(80);
+    expect(usage.sevenDayResetInSeconds).toBe(3 * 86400);
+    expect(_test.formatUsageSnapshot(usage, { showResetTimes: false }, now)).toBe("Usage: 7d: 80%");
+    const formatted = _test.formatUsageSnapshot(usage, { showResetTimes: true }, now);
+    expect(formatted).toContain("Usage: 7d: 80% | 7d ↺ 3d0h - ");
+    expect(formatted).not.toContain("5h");
+  });
+
+  test("parses both usage windows by duration", () => {
+    const usage = _test.parseUsageSnapshot(
+      {
+        rate_limit: {
+          primary_window: {
+            used_percent: 1,
+            limit_window_seconds: 18000,
+            reset_after_seconds: 60,
+          },
+          secondary_window: {
+            used_percent: 49,
+            limit_window_seconds: 604800,
+            reset_after_seconds: 3600,
+          },
+        },
+      },
+      "gpt-5.5",
+    );
+
+    expect(usage.fiveHourLeftPercent).toBe(99);
+    expect(usage.sevenDayLeftPercent).toBe(51);
+    expect(usage.fiveHourResetInSeconds).toBe(60);
+    expect(usage.sevenDayResetInSeconds).toBe(3600);
+    expect(_test.formatUsageSnapshot(usage, { showResetTimes: false })).toBe(
+      "Usage: 5h: 99% | 7d: 51%",
+    );
+  });
+
   test("decrements reset countdowns without moving the reset clock", () => {
     const capturedAt = new Date("2026-07-09T12:00:00Z").getTime();
     const usage = _test.parseUsageSnapshot(
